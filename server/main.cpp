@@ -421,6 +421,7 @@ void Server::reap_finished() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    
     tcp::WinsockGuard winsock;
     if (!winsock.ok()) {
         std::cerr << "Не удалось инициализировать сетевую библиотеку\n";
