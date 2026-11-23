@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 #include <system_error>
@@ -18,22 +19,18 @@
 namespace tcp::net {
 namespace {
 
-constexpr std::size_t kMaxChunkSize = 0x7FFFFFFF;  // ограничение int для recv/send
+constexpr std::size_t kMaxChunkSize = 0x7FFFFFFF;
 
 #ifdef MSG_NOSIGNAL
-constexpr int kSendFlags = MSG_NOSIGNAL;  // не получать SIGPIPE при разрыве
+constexpr int kSendFlags = MSG_NOSIGNAL;
 #else
 constexpr int kSendFlags = 0;
 #endif
 
 int poll_timeout_ms(std::chrono::milliseconds timeout) {
     const auto count = timeout.count();
-    if (count < 0) {
-        return -1;  // бесконечно
-    }
-    if (count > 0x7FFFFFFF) {
-        return 0x7FFFFFFF;
-    }
+    if (count < 0) return -1;
+    if (count > 0x7FFFFFFF) return 0x7FFFFFFF;
     return static_cast<int>(count);
 }
 
@@ -49,35 +46,42 @@ WaitResult wait_event(socket_t socket_fd, short events, std::chrono::millisecond
         result = TCP_POLL(&descriptor, 1, poll_timeout_ms(timeout));
     } while (result < 0 && is_interrupted_error(last_socket_error_code()));
 
-    if (result == 0) {
-        return WaitResult::Timeout;
-    }
+    if (result == 0) return WaitResult::Timeout;
     if (result < 0) {
-        if (error) {
-            *error = "poll(): " + last_socket_error();
-        }
+        if (error) *error = "poll(): " + last_socket_error();
         return WaitResult::Error;
     }
 
     const short revents = descriptor.revents;
-    if (revents & (POLLERR | POLLNVAL)) {
-        if (error) {
-            *error = "poll(): ошибка сокета";
-        }
+    if (revents & POLLNVAL) {
+        if (error) *error = "poll(): невалидный дескриптор";
         return WaitResult::Error;
     }
-    if (revents & (events | POLLHUP)) {
-        return WaitResult::Ready;  // при POLLHUP последующий recv вернёт 0 (EOF)
-    }
+    // POLLERR «пропускаем наверх» как Ready: последующий recv/send вернёт
+    // настоящий errno (ECONNRESET, EPIPE, ...) — лог будет информативнее.
+    if (revents & (events | POLLHUP | POLLERR)) return WaitResult::Ready;
     return WaitResult::Timeout;
 }
 
 }  // namespace
 
+TimePoint deadline_from_now(std::chrono::milliseconds timeout) noexcept {
+    if (timeout.count() < 0) return no_deadline();
+    return Clock::now() + timeout;
+}
+
+std::chrono::milliseconds time_left(TimePoint deadline) noexcept {
+    if (deadline == no_deadline()) return std::chrono::milliseconds::max();
+    const auto now = Clock::now();
+    if (now >= deadline) return std::chrono::milliseconds::zero();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
 std::string last_socket_error() {
     const int code = last_socket_error_code();
     std::ostringstream out;
-    out << "code=" << code << " (" << std::error_code(code, std::system_category()).message() << ")";
+    out << "code=" << code << " ("
+        << std::error_code(code, std::system_category()).message() << ")";
     return out.str();
 }
 
@@ -115,7 +119,6 @@ bool is_timeout_error(int code) noexcept {
 
 std::string describe_peer(const sockaddr_in& address) {
     char text[INET_ADDRSTRLEN] = {0};
-    // в Winsock inet_ntop принимает не-const указатель, в POSIX — const
     auto* raw = const_cast<in_addr*>(&address.sin_addr);
     const char* converted = ::inet_ntop(AF_INET, raw, text, sizeof(text));
 
@@ -167,25 +170,19 @@ bool set_nonblocking(socket_t socket_fd, bool enable, std::string* error) {
 #ifdef _WIN32
     u_long mode = enable ? 1u : 0u;
     if (::ioctlsocket(socket_fd, FIONBIO, &mode) != 0) {
-        if (error) {
-            *error = "ioctlsocket(FIONBIO): " + last_socket_error();
-        }
+        if (error) *error = "ioctlsocket(FIONBIO): " + last_socket_error();
         return false;
     }
     return true;
 #else
     const int flags = ::fcntl(socket_fd, F_GETFL, 0);
     if (flags < 0) {
-        if (error) {
-            *error = "fcntl(F_GETFL): " + last_socket_error();
-        }
+        if (error) *error = "fcntl(F_GETFL): " + last_socket_error();
         return false;
     }
     const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
     if (::fcntl(socket_fd, F_SETFL, updated) < 0) {
-        if (error) {
-            *error = "fcntl(F_SETFL): " + last_socket_error();
-        }
+        if (error) *error = "fcntl(F_SETFL): " + last_socket_error();
         return false;
     }
     return true;
@@ -200,108 +197,140 @@ WaitResult wait_writable(socket_t socket_fd, std::chrono::milliseconds timeout, 
     return wait_event(socket_fd, POLLOUT, timeout, error);
 }
 
-IoStatus read_exact(socket_t socket_fd, void* buffer, std::size_t size, std::string* error) {
+WaitResult wait_readable_until(socket_t socket_fd, TimePoint deadline, std::string* error) {
+    if (deadline == no_deadline()) {
+        return wait_readable(socket_fd, std::chrono::milliseconds{-1}, error);
+    }
+    const auto left = time_left(deadline);
+    if (left.count() <= 0) return WaitResult::Timeout;
+    return wait_readable(socket_fd, left, error);
+}
+
+WaitResult wait_writable_until(socket_t socket_fd, TimePoint deadline, std::string* error) {
+    if (deadline == no_deadline()) {
+        return wait_writable(socket_fd, std::chrono::milliseconds{-1}, error);
+    }
+    const auto left = time_left(deadline);
+    if (left.count() <= 0) return WaitResult::Timeout;
+    return wait_writable(socket_fd, left, error);
+}
+
+IoStatus read_exact_until(socket_t socket_fd, void* buffer, std::size_t size,
+                          TimePoint deadline, std::string* error) {
     auto* data = static_cast<char*>(buffer);
     std::size_t total = 0;
-
     while (total < size) {
+        if (deadline != no_deadline()) {
+            const auto left = time_left(deadline);
+            if (left.count() <= 0) {
+                if (error) *error = "таймаут чтения (дедлайн истёк)";
+                return IoStatus::Timeout;
+            }
+            const auto waited = wait_readable(socket_fd, left, error);
+            if (waited == WaitResult::Timeout) {
+                if (error) *error = "таймаут чтения";
+                return IoStatus::Timeout;
+            }
+            if (waited == WaitResult::Error) return IoStatus::Error;
+            if (waited == WaitResult::Interrupted) continue;
+        }
+
         const std::size_t remaining = size - total;
         const int chunk = static_cast<int>(std::min(remaining, kMaxChunkSize));
-        const long long received = static_cast<long long>(::recv(socket_fd, data + total, chunk, 0));
+        const long long received =
+            static_cast<long long>(::recv(socket_fd, data + total, chunk, 0));
 
-        if (received > 0) {
-            total += static_cast<std::size_t>(received);
-            continue;
-        }
+        if (received > 0) { total += static_cast<std::size_t>(received); continue; }
         if (received == 0) {
             if (total == 0) {
-                if (error) {
-                    *error = "пир закрыл соединение";
-                }
+                if (error) *error = "пир закрыл соединение";
                 return IoStatus::Closed;
             }
-            if (error) {
-                *error = "пир закрыл соединение в середине сообщения";
-            }
+            if (error) *error = "пир закрыл соединение в середине сообщения";
             return IoStatus::Error;
         }
 
         const int code = last_socket_error_code();
-        if (is_interrupted_error(code)) {
-            continue;
-        }
+        if (is_interrupted_error(code)) continue;
         if (is_timeout_error(code)) {
-            if (error) {
-                *error = "таймаут чтения";
-            }
+            if (error) *error = "таймаут чтения";
             return IoStatus::Timeout;
         }
-        if (error) {
-            *error = "recv(): " + last_socket_error();
-        }
+        if (is_would_block_error(code)) continue;  // гонка между poll и recv — просто ещё раз
+        if (error) *error = "recv(): " + last_socket_error();
         return IoStatus::Error;
     }
     return IoStatus::Ok;
 }
 
-IoStatus write_all(socket_t socket_fd, const void* buffer, std::size_t size, std::string* error) {
+IoStatus write_all_until(socket_t socket_fd, const void* buffer, std::size_t size,
+                         TimePoint deadline, std::string* error) {
     const auto* data = static_cast<const char*>(buffer);
     std::size_t total = 0;
-
     while (total < size) {
+        if (deadline != no_deadline()) {
+            const auto left = time_left(deadline);
+            if (left.count() <= 0) {
+                if (error) *error = "таймаут записи (дедлайн истёк)";
+                return IoStatus::Timeout;
+            }
+            const auto waited = wait_writable(socket_fd, left, error);
+            if (waited == WaitResult::Timeout) {
+                if (error) *error = "таймаут записи";
+                return IoStatus::Timeout;
+            }
+            if (waited == WaitResult::Error) return IoStatus::Error;
+            if (waited == WaitResult::Interrupted) continue;
+        }
+
         const std::size_t remaining = size - total;
         const int chunk = static_cast<int>(std::min(remaining, kMaxChunkSize));
         const long long sent =
             static_cast<long long>(::send(socket_fd, data + total, chunk, kSendFlags));
 
-        if (sent > 0) {
-            total += static_cast<std::size_t>(sent);
-            continue;
-        }
+        if (sent > 0) { total += static_cast<std::size_t>(sent); continue; }
 
         const int code = last_socket_error_code();
-        if (is_interrupted_error(code)) {
-            continue;
-        }
+        if (is_interrupted_error(code)) continue;
         if (is_timeout_error(code)) {
-            if (error) {
-                *error = "таймаут записи";
-            }
+            if (error) *error = "таймаут записи";
             return IoStatus::Timeout;
         }
-        if (error) {
-            *error = "send(): " + last_socket_error();
-        }
+        if (is_would_block_error(code)) continue;
+        if (error) *error = "send(): " + last_socket_error();
         return IoStatus::Error;
     }
     return IoStatus::Ok;
 }
 
+// --- обратная совместимость ---
+
+IoStatus read_exact(socket_t socket_fd, void* buffer, std::size_t size, std::string* error) {
+    return read_exact_until(socket_fd, buffer, size, no_deadline(), error);
+}
+
+IoStatus write_all(socket_t socket_fd, const void* buffer, std::size_t size, std::string* error) {
+    return write_all_until(socket_fd, buffer, size, no_deadline(), error);
+}
+
 IoStatus connect_with_timeout(socket_t socket_fd, const sockaddr* address, int address_length,
                               std::chrono::milliseconds timeout, std::string* error) {
-    if (!set_nonblocking(socket_fd, true, error)) {
-        return IoStatus::Error;
-    }
+    if (!set_nonblocking(socket_fd, true, error)) return IoStatus::Error;
 
     const int result = ::connect(socket_fd, address, static_cast<socklen_type>(address_length));
     if (result == 0) {
         set_nonblocking(socket_fd, false, nullptr);
         return IoStatus::Ok;
     }
-
     if (!is_would_block_error(last_socket_error_code())) {
-        if (error) {
-            *error = "connect(): " + last_socket_error();
-        }
+        if (error) *error = "connect(): " + last_socket_error();
         set_nonblocking(socket_fd, false, nullptr);
         return IoStatus::Error;
     }
 
     const WaitResult waited = wait_writable(socket_fd, timeout, error);
     if (waited == WaitResult::Timeout) {
-        if (error) {
-            *error = "connect(): превышен таймаут подключения";
-        }
+        if (error) *error = "connect(): превышен таймаут подключения";
         set_nonblocking(socket_fd, false, nullptr);
         return IoStatus::Timeout;
     }
@@ -314,9 +343,7 @@ IoStatus connect_with_timeout(socket_t socket_fd, const sockaddr* address, int a
     socklen_type length = sizeof(socket_error);
     if (::getsockopt(socket_fd, SOL_SOCKET, SO_ERROR,
                      reinterpret_cast<char*>(&socket_error), &length) != 0) {
-        if (error) {
-            *error = "getsockopt(SO_ERROR): " + last_socket_error();
-        }
+        if (error) *error = "getsockopt(SO_ERROR): " + last_socket_error();
         set_nonblocking(socket_fd, false, nullptr);
         return IoStatus::Error;
     }
@@ -335,9 +362,7 @@ IoStatus connect_with_timeout(socket_t socket_fd, const sockaddr* address, int a
 }
 
 void shutdown_socket(socket_t socket_fd) noexcept {
-    if (!socket_valid(socket_fd)) {
-        return;
-    }
+    if (!socket_valid(socket_fd)) return;
 #ifdef _WIN32
     ::shutdown(socket_fd, SD_BOTH);
 #else

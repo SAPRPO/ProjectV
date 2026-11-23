@@ -1,27 +1,80 @@
-# Заголовок с мини-фреймворком доступен всем тестам (без сторонних зависимостей).
-add_library(tcp_tests_common INTERFACE)
-target_include_directories(tcp_tests_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(tcp_tests_common INTERFACE tcp_common)
+# tests/CMakeLists.txt
+#
+# Тестовый набор ProjectV.
+#
+# ВАЖНО: файла test_framework.cpp в проекте НЕТ. Поэтому общий main
+# сюда не подключается. Поддержаны два варианта:
+#
+#   1) каждый test_*.cpp содержит свой main          → TCP_TEST_MAIN_SOURCE = ""
+#   2) main лежит в отдельном общем файле           → TCP_TEST_MAIN_SOURCE = "имя.cpp"
+#
+# По умолчанию выбран (1).
 
-# Для GCC < 9 нужна явная линковка std::filesystem
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
-    target_link_libraries(tcp_tests_common INTERFACE stdc++fs)
-endif()
+# Если найдёте общий файл с main (например test_main.cpp) — впишите его имя сюда.
+set(TCP_TEST_MAIN_SOURCE "")
 
+# ---------------------------------------------------------------------------
+# tcp_add_test(test_protocol)   ← ОДИН аргумент, без ".cpp"
+# ---------------------------------------------------------------------------
 function(tcp_add_test name)
-    add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE tcp_tests_common)
-    tcp_enable_warnings(${name})
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp")
+        message(FATAL_ERROR
+            "tcp_add_test(${name}): файл '${name}.cpp' не найден в "
+            "${CMAKE_CURRENT_SOURCE_DIR}. Имя теста должно совпадать с "
+            "именем .cpp без расширения.")
+    endif()
+
+    set(_sources "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp")
+
+    if(TCP_TEST_MAIN_SOURCE)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${TCP_TEST_MAIN_SOURCE}")
+            message(FATAL_ERROR
+                "tcp_add_test(${name}): общий файл с main "
+                "'${TCP_TEST_MAIN_SOURCE}' не найден в "
+                "${CMAKE_CURRENT_SOURCE_DIR}.")
+        endif()
+        list(APPEND _sources "${CMAKE_CURRENT_SOURCE_DIR}/${TCP_TEST_MAIN_SOURCE}")
+    endif()
+
+    add_executable(${name} ${_sources})
+
+    if(TARGET Threads::Threads)
+        target_link_libraries(${name} PRIVATE tcp_common Threads::Threads)
+    else()
+        target_link_libraries(${name} PRIVATE tcp_common)
+    endif()
+
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    if(COMMAND tcp_enable_warnings)
+        tcp_enable_warnings(${name})
+    endif()
+
     add_test(NAME ${name} COMMAND ${name})
-    set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+
+    if(EXISTS "${CMAKE_BINARY_DIR}/bin")
+        set_tests_properties(${name} PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
 endfunction()
 
-tcp_add_test(test_protocol test_protocol.cpp)
-tcp_add_test(test_logger test_logger.cpp)
+# ---------------------------------------------------------------------------
+# Регистрация тестов — ОДИН аргумент на строку
+# ---------------------------------------------------------------------------
+tcp_add_test(test_logger)
+tcp_add_test(test_protocol)
+tcp_add_test(test_net_utils)
+tcp_add_test(test_integration)
 
-# Интеграционный тест сам запускает сервер, путь к которому передаёт CMake.
-add_executable(test_integration test_integration.cpp)
-target_link_libraries(test_integration PRIVATE tcp_tests_common)
-tcp_enable_warnings(test_integration)
-add_test(NAME test_integration COMMAND test_integration $<TARGET_FILE:tcp_server>)
-set_tests_properties(test_integration PROPERTIES TIMEOUT 180)
+# ---------------------------------------------------------------------------
+# GCC < 9 и <filesystem>
+# ---------------------------------------------------------------------------
+if(UNIX
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    foreach(t test_logger test_protocol test_net_utils test_integration)
+        if(TARGET ${t})
+            target_link_libraries(${t} PRIVATE stdc++fs)
+        endif()
+    endforeach()
+endif()
