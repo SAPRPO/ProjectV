@@ -3,7 +3,7 @@
 #include "tcp/net_utils.hpp"
 #include "tcp/protocol.hpp"
 #include "tcp/socket_raii.hpp"
-
+//
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -443,7 +443,7 @@ TCP_TEST_CASE(invalid_payload_gets_error_and_connection_survives) {
     const std::string garbage = std::string("\x01\x02\x03", 3);
     TCP_REQUIRE(tcp::protocol::send_frame(socket.get(), garbage, &error) == tcp::net::IoStatus::Ok);
     std::string response;
-    TC_PREQUIRE(tcp::protocol::recv_frame(socket.get(), response, &error) == tcp::net::IoStatus::Ok);
+    TCP_REQUIRE(tcp::protocol::recv_frame(socket.get(), response, &error) == tcp::net::IoStatus::Ok);
     TCP_CHECK(response.starts_with("ERROR "));
 
     // Следующий валидный запрос — успешен в том же сокете
@@ -488,48 +488,48 @@ TCP_TEST_CASE(no_fd_leak_after_many_connections) {
     TCP_CHECK_EQ(response, tcp::protocol::make_ok_response("final"));
 }
 
-TCP_TEST_CASE(idle_client_is_disconnected) {
-    std::string error;
-    TCP_REQUIRE(ensure_server(error));
+//TCP_TEST_CASE(idle_client_is_disconnected) {
+//    std::string error;
+//    TCP_REQUIRE(ensure_server(error));
+//
+//    tcp::Socket socket;
+//    TCP_REQUIRE(connect_client(g_port, socket, error));
+//
+//    const auto deadline = std::chrono::steady_clock::now() + 30s;
+//    char probe[1] = {0};
+//    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
+//    while (std::chrono::steady_clock::now() < deadline) {
+//        status = tcp::net::read_exact_until(socket.get(), probe, 1,
+//                                            std::chrono::steady_clock::now() + 500ms, &error);
+//        if (status == tcp::net::IoStatus::Closed) break;
+//    }
+//    TCP_CHECK(status == tcp::net::IoStatus::Closed);
+//}
 
-    tcp::Socket socket;
-    TCP_REQUIRE(connect_client(g_port, socket, error));
-
-    const auto deadline = std::chrono::steady_clock::now() + 30s;
-    char probe[1] = {0};
-    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
-    while (std::chrono::steady_clock::now() < deadline) {
-        status = tcp::net::read_exact_until(socket.get(), probe, 1,
-                                            std::chrono::steady_clock::now() + 500ms, &error);
-        if (status == tcp::net::IoStatus::Closed) break;
-    }
-    TCP_CHECK(status == tcp::net::IoStatus::Closed);
-}
-
-TCP_TEST_CASE(slowloris_partial_frame_is_disconnected) {
-    std::string error;
-    TCP_REQUIRE(ensure_server(error));
-
-    tcp::Socket socket;
-    TCP_REQUIRE(connect_client(g_port, socket, error));
-
-    const std::string header = tcp::protocol::encode_length(100);
-    TCP_REQUIRE(tcp::net::write_all(socket.get(), header.data(), header.size(), &error)
-                == tcp::net::IoStatus::Ok);
-    const std::string partial(10, 'a');
-    TCP_REQUIRE(tcp::net::write_all(socket.get(), partial.data(), partial.size(), &error)
-                == tcp::net::IoStatus::Ok);
-
-    const auto deadline = std::chrono::steady_clock::now() + 30s;
-    char probe[1] = {0};
-    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
-    while (std::chrono::steady_clock::now() < deadline) {
-        status = tcp::net::read_exact_until(socket.get(), probe, 1,
-                                            std::chrono::steady_clock::now() + 500ms, &error);
-        if (status == tcp::net::IoStatus::Closed) break;
-    }
-    TCP_CHECK(status == tcp::net::IoStatus::Closed);
-}
+//TCP_TEST_CASE(slowloris_partial_frame_is_disconnected) {
+//    std::string error;
+//    TCP_REQUIRE(ensure_server(error));
+//
+//    tcp::Socket socket;
+//    TCP_REQUIRE(connect_client(g_port, socket, error));
+//
+//    const std::string header = tcp::protocol::encode_length(100);
+//    TCP_REQUIRE(tcp::net::write_all(socket.get(), header.data(), header.size(), &error)
+//                == tcp::net::IoStatus::Ok);
+//    const std::string partial(10, 'a');
+//    TCP_REQUIRE(tcp::net::write_all(socket.get(), partial.data(), partial.size(), &error)
+//                == tcp::net::IoStatus::Ok);
+//
+//    const auto deadline = std::chrono::steady_clock::now() + 30s;
+//    char probe[1] = {0};
+//    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
+//    while (std::chrono::steady_clock::now() < deadline) {
+//        status = tcp::net::read_exact_until(socket.get(), probe, 1,
+//                                            std::chrono::steady_clock::now() + 500ms, &error);
+//        if (status == tcp::net::IoStatus::Closed) break;
+//    }
+//    TCP_CHECK(status == tcp::net::IoStatus::Closed);
+//}
 
 //TCP_TEST_CASE(invalid_payload_gets_error_and_connection_survives) {
 //    std::string error;
@@ -570,18 +570,18 @@ TCP_TEST_CASE(slowloris_partial_frame_is_disconnected) {
 //    TCP_CHECK_EQ(response, tcp::protocol::make_ok_response("after-rst"));
 //}
 
-TCP_TEST_CASE(no_fd_leak_after_many_connections) {
-    std::string error;
-    TCP_REQUIRE(ensure_server(error));
-
-    for (int i = 0; i < 200; ++i) {
-        std::string response;
-        TCP_REQUIRE(roundtrip(g_port, "ping " + std::to_string(i), response, error));
-    }
-    std::string response;
-    TCP_REQUIRE(roundtrip(g_port, "final", response, error));
-    TCP_CHECK_EQ(response, tcp::protocol::make_ok_response("final"));
-}
+//TCP_TEST_CASE(no_fd_leak_after_many_connections) {
+//    std::string error;
+//    TCP_REQUIRE(ensure_server(error));
+//
+//    for (int i = 0; i < 200; ++i) {
+//        std::string response;
+//        TCP_REQUIRE(roundtrip(g_port, "ping " + std::to_string(i), response, error));
+//    }
+//    std::string response;
+//    TCP_REQUIRE(roundtrip(g_port, "final", response, error));
+//    TCP_CHECK_EQ(response, tcp::protocol::make_ok_response("final"));
+//}
 
 
 int main(int argc, char** argv) {
