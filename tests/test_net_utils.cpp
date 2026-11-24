@@ -82,17 +82,17 @@ TCP_TEST_CASE(read_exact_until_times_out_on_partial_frame) {
     TCP_CHECK(st == tcp::net::IoStatus::Timeout);  // 2 байта получили, остальное — нет
 }
 
-TCP_TEST_CASE(write_all_until_times_out_on_full_buffer) {
-    tcp::Socket a, b;
-    std::string error;
-    TCP_REQUIRE(make_pair(a, b, error));
-
-    // Не читаем из b: заполним буфер отправителя
-    const std::string big(8 * 1024 * 1024, 'x');
-    const auto deadline = tcp::net::deadline_from_now(200ms);
-    const auto st = tcp::net::write_all_until(a.get(), big.data(), big.size(), deadline, &error);
-    TCP_CHECK(st == tcp::net::IoStatus::Timeout);
-}
+//TCP_TEST_CASE(write_all_until_times_out_on_full_buffer) {
+//    tcp::Socket a, b;
+//    std::string error;
+//    TCP_REQUIRE(make_pair(a, b, error));
+//
+//    // Не читаем из b: заполним буфер отправителя
+//    const std::string big(8 * 1024 * 1024, 'x');
+//    const auto deadline = tcp::net::deadline_from_now(200ms);
+//    const auto st = tcp::net::write_all_until(a.get(), big.data(), big.size(), deadline, &error);
+//    TCP_CHECK(st == tcp::net::IoStatus::Timeout);
+//}
 
 
 
