@@ -1,6 +1,7 @@
 #include "tcp/net_utils.hpp"
 
 #include <algorithm>
+#include <poll.h>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -263,12 +264,54 @@ IoStatus read_exact_until(socket_t socket_fd, void* buffer, std::size_t size,
     return IoStatus::Ok;
 }
 
+//IoStatus write_all_until(socket_t socket_fd, const void* buffer, std::size_t size,
+//                         TimePoint deadline, std::string* error) {
+//    const auto* data = static_cast<const char*>(buffer);
+//    std::size_t total = 0;
+//    while (total < size) {
+//        if (deadline != no_deadline()) {
+//            const auto left = time_left(deadline);
+//            if (left.count() <= 0) {
+//                if (error) *error = "таймаут записи (дедлайн истёк)";
+//                return IoStatus::Timeout;
+//            }
+//            const auto waited = wait_writable(socket_fd, left, error);
+//            if (waited == WaitResult::Timeout) {
+//                if (error) *error = "таймаут записи";
+//                return IoStatus::Timeout;
+//            }
+//            if (waited == WaitResult::Error) return IoStatus::Error;
+//            if (waited == WaitResult::Interrupted) continue;
+//        }
+//
+//        const std::size_t remaining = size - total;
+//        const int chunk = static_cast<int>(std::min(remaining, kMaxChunkSize));
+//        const long long sent =
+//            static_cast<long long>(::send(socket_fd, data + total, chunk, kSendFlags));
+//
+//        if (sent > 0) { total += static_cast<std::size_t>(sent); continue; }
+//
+//        const int code = last_socket_error_code();
+//        if (is_interrupted_error(code)) continue;
+//        if (is_timeout_error(code)) {
+//            if (error) *error = "таймаут записи";
+//            return IoStatus::Timeout;
+//        }
+//        if (is_would_block_error(code)) continue;
+//        if (error) *error = "send(): " + last_socket_error();
+//        return IoStatus::Error;
+//    }
+//    return IoStatus::Ok;
+//}
+
 IoStatus write_all_until(socket_t socket_fd, const void* buffer, std::size_t size,
                          TimePoint deadline, std::string* error) {
     const auto* data = static_cast<const char*>(buffer);
     std::size_t total = 0;
+    const bool has_deadline = (deadline != no_deadline());
+
     while (total < size) {
-        if (deadline != no_deadline()) {
+        if (has_deadline) {
             const auto left = time_left(deadline);
             if (left.count() <= 0) {
                 if (error) *error = "таймаут записи (дедлайн истёк)";
@@ -285,8 +328,12 @@ IoStatus write_all_until(socket_t socket_fd, const void* buffer, std::size_t siz
 
         const std::size_t remaining = size - total;
         const int chunk = static_cast<int>(std::min(remaining, kMaxChunkSize));
+
+        // С дедлайном send обязан быть неблокирующим, иначе poll + блокирующий
+        // send зависают на переполненном буфере и дедлайн не проверяется.
+        const int send_flags = has_deadline ? (kSendFlags | MSG_DONTWAIT) : kSendFlags;
         const long long sent =
-            static_cast<long long>(::send(socket_fd, data + total, chunk, kSendFlags));
+            static_cast<long long>(::send(socket_fd, data + total, chunk, send_flags));
 
         if (sent > 0) { total += static_cast<std::size_t>(sent); continue; }
 

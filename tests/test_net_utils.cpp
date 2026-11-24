@@ -12,9 +12,21 @@ using namespace std::chrono_literals;
 
 namespace {
 
+bool set_buf(int fd, int opt, int bytes, std::string& error) {
+    if (::setsockopt(fd, SOL_SOCKET, opt, &bytes, sizeof(bytes)) != 0) {
+        error = tcp::net::last_socket_error();
+        return false;
+    }
+    return true;
+}
+
 bool make_pair(tcp::Socket& a, tcp::Socket& b, std::string& error) {
     tcp::Socket lst(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     tcp::net::set_reuse_address(lst.get());
+
+    // Приёмный буфер слушающего сокета наследуется accepted-сокетом (Linux):
+    // так окно TCP у b станет маленьким -> отправитель заблокируется быстро.
+    if (!set_buf(lst.get(), SO_RCVBUF, 32 * 1024, error)) return false;
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -29,6 +41,10 @@ bool make_pair(tcp::Socket& a, tcp::Socket& b, std::string& error) {
     ::getsockname(lst.get(), reinterpret_cast<sockaddr*>(&addr), &len);
 
     tcp::Socket c(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+
+    // Буфер отправки маленький -> 8 МиБ гарантированно не влезут.
+    if (!set_buf(c.get(), SO_SNDBUF, 32 * 1024, error)) return false;
+
     if (::connect(c.get(), reinterpret_cast<sockaddr*>(&addr),
                   static_cast<tcp::net::socklen_type>(sizeof(addr))) != 0) {
         error = tcp::net::last_socket_error(); return false;
@@ -82,17 +98,23 @@ TCP_TEST_CASE(read_exact_until_times_out_on_partial_frame) {
     TCP_CHECK(st == tcp::net::IoStatus::Timeout);  // 2 байта получили, остальное — нет
 }
 
-//TCP_TEST_CASE(write_all_until_times_out_on_full_buffer) {
-//    tcp::Socket a, b;
-//    std::string error;
-//    TCP_REQUIRE(make_pair(a, b, error));
-//
-//    // Не читаем из b: заполним буфер отправителя
-//    const std::string big(8 * 1024 * 1024, 'x');
-//    const auto deadline = tcp::net::deadline_from_now(200ms);
-//    const auto st = tcp::net::write_all_until(a.get(), big.data(), big.size(), deadline, &error);
-//    TCP_CHECK(st == tcp::net::IoStatus::Timeout);
-//}
+TCP_TEST_CASE(write_all_until_times_out_on_full_buffer) {
+    tcp::Socket a, b;
+    std::string error;
+    TCP_REQUIRE(make_pair(a, b, error));
+
+    // Не читаем из b: заполним буфер отправителя
+    const std::string big(1 * 1024 * 1024, 'x');
+    const auto deadline = tcp::net::deadline_from_now(200ms);
+    const auto started = std::chrono::steady_clock::now();
+    const auto st = tcp::net::write_all_until(a.get(), big.data(), big.size(), deadline, &error);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    TCP_CHECK(st == tcp::net::IoStatus::Timeout);
+    TCP_CHECK(elapsed < 2s);          // защита от повторной регрессии: тест не «висит», а истекает
+    TCP_CHECK(!error.empty());    
+
+}
 
 
 
