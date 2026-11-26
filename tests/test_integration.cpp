@@ -444,7 +444,7 @@ TCP_TEST_CASE(invalid_payload_gets_error_and_connection_survives) {
     TCP_REQUIRE(tcp::protocol::send_frame(socket.get(), garbage, &error) == tcp::net::IoStatus::Ok);
     std::string response;
     TCP_REQUIRE(tcp::protocol::recv_frame(socket.get(), response, &error) == tcp::net::IoStatus::Ok);
-    TCP_CHECK(response.starts_with("ERROR "));
+    TCP_CHECK(response.starts_with("ERROR ")); // TODO: check this
 
     // Следующий валидный запрос — успешен в том же сокете
     TCP_REQUIRE(tcp::protocol::send_frame(socket.get(), "hello", &error) == tcp::net::IoStatus::Ok);
