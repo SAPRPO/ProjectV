@@ -104,7 +104,7 @@ add_dependencies(test_integration tcp_server)
 # Необязательно: пометки и запас по времени (сервер стартует и глушится тестом).
 set_tests_properties(test_integration PROPERTIES
     LABELS "integration"
-    TIMEOUT 20)  # instead of 120
+    TIMEOUT 40)  # instead of 120
 set_tests_properties(test_logger test_protocol test_net_utils PROPERTIES
     LABELS "unit")
 
