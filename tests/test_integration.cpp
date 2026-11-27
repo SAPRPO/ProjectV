@@ -488,23 +488,23 @@ TCP_TEST_CASE(no_fd_leak_after_many_connections) {
     TCP_CHECK_EQ(response, tcp::protocol::make_ok_response("final"));
 }
 
-//TCP_TEST_CASE(idle_client_is_disconnected) {
-//    std::string error;
-//    TCP_REQUIRE(ensure_server(error));
-//
-//    tcp::Socket socket;
-//    TCP_REQUIRE(connect_client(g_port, socket, error));
-//
-//    const auto deadline = std::chrono::steady_clock::now() + 30s;
-//    char probe[1] = {0};
-//    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
-//    while (std::chrono::steady_clock::now() < deadline) {
-//        status = tcp::net::read_exact_until(socket.get(), probe, 1,
-//                                            std::chrono::steady_clock::now() + 500ms, &error);
-//        if (status == tcp::net::IoStatus::Closed) break;
-//    }
-//    TCP_CHECK(status == tcp::net::IoStatus::Closed);
-//}
+TCP_TEST_CASE(idle_client_is_disconnected) {
+    std::string error;
+    TCP_REQUIRE(ensure_server(error));
+
+    tcp::Socket socket;
+    TCP_REQUIRE(connect_client(g_port, socket, error));
+
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    char probe[1] = {0};
+    tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
+    while (std::chrono::steady_clock::now() < deadline) {
+        status = tcp::net::read_exact_until(socket.get(), probe, 1,
+                                            std::chrono::steady_clock::now() + 500ms, &error);
+        if (status == tcp::net::IoStatus::Closed) break;
+    }
+    TCP_CHECK(status == tcp::net::IoStatus::Closed);
+}
 
 //TCP_TEST_CASE(slowloris_partial_frame_is_disconnected) {
 //    std::string error;
