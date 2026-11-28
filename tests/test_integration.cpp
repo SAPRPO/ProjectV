@@ -489,16 +489,21 @@ TCP_TEST_CASE(no_fd_leak_after_many_connections) {
 }
 
 TCP_TEST_CASE(idle_client_is_disconnected) {
+    std::cout << "enter 1 TCP_TEST_CASE idle_client_is_disconnected" << std::endl;
     std::string error;
     TCP_REQUIRE(ensure_server(error));
+    std::cout << "enter 2 after require" << std::endl;
 
     tcp::Socket socket;
+    std::cout << "enter 3 socket" << std::endl;
+    
     TCP_REQUIRE(connect_client(g_port, socket, error));
-
+    std::cout << "enter 4 connect_client" << std::endl;
     const auto deadline = std::chrono::steady_clock::now() + 30s;
     char probe[1] = {0};
     tcp::net::IoStatus status = tcp::net::IoStatus::Ok;
     while (std::chrono::steady_clock::now() < deadline) {
+        std::cout << "enter 5 in while" << std::endl;
         status = tcp::net::read_exact_until(socket.get(), probe, 1,
                                             std::chrono::steady_clock::now() + 500ms, &error);
         if (status == tcp::net::IoStatus::Closed) break;
